@@ -19,13 +19,33 @@ from src.utils import (
 )
 
 
+def ensemble_weight_slug(ensemble_weights: str | None) -> str:
+    weight_text = ensemble_weights or "3,2,1"
+    weights = [float(part.strip()) for part in weight_text.split(",") if part.strip()]
+    return "_".join(str(int(weight)) if weight.is_integer() else str(weight).replace(".", "p") for weight in weights)
+
+
+def default_output_path(args: argparse.Namespace) -> Path:
+    if args.model == "ensemble":
+        return Path(f"submission_ensemble_{ensemble_weight_slug(args.ensemble_weights)}.csv")
+    return Path("submission_extra_trees.csv")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train a HAR baseline and create sample_submission-compatible predictions."
     )
     parser.add_argument("--data-root", type=Path, default=Path("."), help="Folder containing train/, test/, and sample_submission.csv.")
     parser.add_argument("--sample-submission", type=Path, default=None, help="Path to sample_submission.csv.")
-    parser.add_argument("--output", type=Path, default=Path("submission.csv"), help="Output CSV path.")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Output CSV path. If omitted, uses submission_extra_trees.csv or "
+            "submission_ensemble_<weights>.csv."
+        ),
+    )
     parser.add_argument("--cache-dir", type=Path, default=Path("cache"), help="Feature cache folder.")
     parser.add_argument("--rebuild-cache", action="store_true", help="Ignore cached features and rebuild them.")
     parser.add_argument("--n-jobs", type=int, default=0, help="Parallel workers. 0 uses up to 4 local cores.")
@@ -64,7 +84,8 @@ def main() -> None:
     n_jobs = auto_n_jobs(args.n_jobs)
     sample_path = args.sample_submission or data_root / "sample_submission.csv"
     cache_dir = args.cache_dir if args.cache_dir.is_absolute() else data_root / args.cache_dir
-    output_path = args.output if args.output.is_absolute() else data_root / args.output
+    output_arg = args.output or default_output_path(args)
+    output_path = output_arg if output_arg.is_absolute() else data_root / output_arg
 
     train_dir = find_split_dir(data_root, "train")
     test_dir = find_split_dir(data_root, "test")

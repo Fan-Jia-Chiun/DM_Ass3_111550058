@@ -20,25 +20,27 @@ except ImportError:  # pragma: no cover - older scikit-learn fallback
     StratifiedGroupKFold = None
 
 
-def resolve_ensemble_weights(ensemble_weights: str | None, estimator_names: list[str]) -> list[float]:
+ALL_ENSEMBLE_NAMES = ["extra_trees", "random_forest", "hist_gb"]
+
+
+def resolve_ensemble_weight_map(ensemble_weights: str | None) -> dict[str, float]:
     if ensemble_weights is None:
-        defaults = {"extra_trees": 3.0, "random_forest": 2.0, "hist_gb": 1.0}
-        return [defaults[name] for name in estimator_names]
+        return {"extra_trees": 3.0, "random_forest": 2.0, "hist_gb": 1.0}
 
     try:
         weights = [float(part.strip()) for part in ensemble_weights.split(",") if part.strip()]
     except ValueError as exc:
         raise ValueError("--ensemble-weights must be comma-separated numbers, e.g. 3,2,1.") from exc
 
-    if len(weights) != len(estimator_names):
-        joined_names = ",".join(estimator_names)
+    if len(weights) != len(ALL_ENSEMBLE_NAMES):
         raise ValueError(
-            f"--ensemble-weights expects {len(estimator_names)} values for {joined_names}; "
+            f"--ensemble-weights expects {len(ALL_ENSEMBLE_NAMES)} values for "
+            f"{','.join(ALL_ENSEMBLE_NAMES)}; "
             f"received {len(weights)}."
         )
     if any(weight < 0 for weight in weights) or sum(weights) <= 0:
         raise ValueError("--ensemble-weights must be non-negative and cannot sum to zero.")
-    return weights
+    return dict(zip(ALL_ENSEMBLE_NAMES, weights))
 
 
 def make_model(
@@ -64,6 +66,7 @@ def make_model(
     if model_name == "extra_trees":
         clf = extra_trees
     else:
+        weight_map = resolve_ensemble_weight_map(ensemble_weights)
         estimators = [
             ("extra_trees", extra_trees),
             (
@@ -90,9 +93,14 @@ def make_model(
                     ),
                 )
             )
-        estimator_names = [name for name, _ in estimators]
-        weights = resolve_ensemble_weights(ensemble_weights, estimator_names)
-        clf = VotingClassifier(estimators=estimators, voting="soft", weights=weights, n_jobs=1)
+        estimators = [(name, estimator) for name, estimator in estimators if weight_map[name] > 0]
+        weights = [weight_map[name] for name, _ in estimators]
+        if not estimators:
+            raise ValueError("No active ensemble estimators. Check --ensemble-weights and installed scikit-learn support.")
+        if len(estimators) == 1:
+            clf = estimators[0][1]
+        else:
+            clf = VotingClassifier(estimators=estimators, voting="soft", weights=weights, n_jobs=1)
 
     return Pipeline(
         steps=[
